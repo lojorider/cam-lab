@@ -14,6 +14,29 @@ final class TimeLapseViewModel: ObservableObject {
 
     private var captureTimer: Timer?
     private var framesDirectory: URL?
+    private var cancellables = Set<AnyCancellable>()
+
+    init() {
+        // Forward cameraManager changes so SwiftUI picks them up
+        cameraManager.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+
+        cleanupOrphanedSessions()
+    }
+
+    /// Remove leftover CamLab_* folders/mp4s in tmp from previous crashed sessions
+    private func cleanupOrphanedSessions() {
+        let tmpDir = FileManager.default.temporaryDirectory
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: tmpDir, includingPropertiesForKeys: nil
+        ) else { return }
+
+        for item in contents where item.lastPathComponent.hasPrefix("CamLab_") {
+            try? FileManager.default.removeItem(at: item)
+        }
+    }
 
     // MARK: - Computed
 
@@ -48,7 +71,7 @@ final class TimeLapseViewModel: ObservableObject {
         let timestamp = ISO8601DateFormatter().string(from: Date())
             .replacingOccurrences(of: ":", with: "-")
         let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("TimeLab_\(timestamp)")
+            .appendingPathComponent("CamLab_\(timestamp)")
 
         do {
             try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -128,7 +151,7 @@ final class TimeLapseViewModel: ObservableObject {
 
         let outputURL = framesDir
             .deletingLastPathComponent()
-            .appendingPathComponent("TimeLab_\(framesDir.lastPathComponent).mp4")
+            .appendingPathComponent("CamLab_\(framesDir.lastPathComponent).mp4")
         let fps = settings.outputFPS.rawValue
 
         Task.detached(priority: .userInitiated) { [weak self] in
@@ -190,7 +213,7 @@ final class TimeLapseViewModel: ObservableObject {
 
             let mp4 = framesDir
                 .deletingLastPathComponent()
-                .appendingPathComponent("TimeLab_\(framesDir.lastPathComponent).mp4")
+                .appendingPathComponent("CamLab_\(framesDir.lastPathComponent).mp4")
             try? FileManager.default.removeItem(at: mp4)
         }
 

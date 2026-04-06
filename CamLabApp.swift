@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct TimeLabApp: App {
+struct CamLabApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()

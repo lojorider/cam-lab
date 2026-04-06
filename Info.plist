@@ -3,6 +3,6 @@
 <plist version="1.0">
 <dict>
 	<key>NSCameraUsageDescription</key>
-	<string>TimeLab needs camera access to capture time-lapse frames.</string>
+	<string>Cam Lab needs camera access to capture time-lapse frames.</string>
 </dict>
 </plist>

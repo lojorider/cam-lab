@@ -27,6 +27,21 @@ struct ControlPanelView: View {
                         .labelsHidden()
                         .disabled(viewModel.state.isRecording)
                     }
+
+                    if viewModel.cameraManager.focusLockSupported {
+                        Toggle(isOn: Binding(
+                            get: { viewModel.cameraManager.isFocusLocked },
+                            set: { _ in viewModel.cameraManager.toggleFocusLock() }
+                        )) {
+                            HStack(spacing: 4) {
+                                Image(systemName: viewModel.cameraManager.isFocusLocked
+                                    ? "lock.fill" : "lock.open")
+                                Text("Lock Focus")
+                            }
+                        }
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                    }
                 }
                 .padding(4)
             }

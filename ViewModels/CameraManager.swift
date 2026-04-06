@@ -29,6 +29,8 @@ final class CameraManager: NSObject, ObservableObject {
             }
         }
     }
+    @Published var isFocusLocked = false
+    @Published var focusLockSupported = false
 
     private let session = AVCaptureSession()
     private let photoOutput = AVCapturePhotoOutput()
@@ -103,6 +105,8 @@ final class CameraManager: NSObject, ObservableObject {
 
         session.commitConfiguration()
 
+        updateFocusSupport(for: camera)
+
         let layer = AVCaptureVideoPreviewLayer(session: session)
         layer.videoGravity = .resizeAspectFill
         self.previewLayer = layer
@@ -115,12 +119,10 @@ final class CameraManager: NSObject, ObservableObject {
     private func switchCamera(to device: AVCaptureDevice) {
         session.beginConfiguration()
 
-        // Remove existing input
         for input in session.inputs {
             session.removeInput(input)
         }
 
-        // Add new input
         guard let newInput = try? AVCaptureDeviceInput(device: device),
               session.canAddInput(newInput) else {
             session.commitConfiguration()
@@ -129,6 +131,54 @@ final class CameraManager: NSObject, ObservableObject {
 
         session.addInput(newInput)
         session.commitConfiguration()
+
+        updateFocusSupport(for: device)
+        isFocusLocked = false
+    }
+
+    // MARK: - Focus Control
+
+    private func updateFocusSupport(for device: AVCaptureDevice) {
+        focusLockSupported = device.isFocusModeSupported(.locked)
+            && device.isFocusModeSupported(.autoFocus)
+    }
+
+    func toggleFocusLock() {
+        guard let device = selectedCamera?.device ?? currentDevice() else { return }
+        do {
+            try device.lockForConfiguration()
+            if isFocusLocked {
+                // Unlock: back to continuous auto-focus
+                if device.isFocusModeSupported(.continuousAutoFocus) {
+                    device.focusMode = .continuousAutoFocus
+                } else if device.isFocusModeSupported(.autoFocus) {
+                    device.focusMode = .autoFocus
+                }
+                isFocusLocked = false
+            } else {
+                // Lock: auto-focus once then lock
+                if device.isFocusModeSupported(.autoFocus) {
+                    device.focusMode = .autoFocus
+                }
+                // After auto-focus completes, lock
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                    guard let self else { return }
+                    do {
+                        try device.lockForConfiguration()
+                        if device.isFocusModeSupported(.locked) {
+                            device.focusMode = .locked
+                        }
+                        device.unlockForConfiguration()
+                        self.isFocusLocked = true
+                    } catch {}
+                }
+            }
+            device.unlockForConfiguration()
+        } catch {}
+    }
+
+    private func currentDevice() -> AVCaptureDevice? {
+        (session.inputs.first as? AVCaptureDeviceInput)?.device
     }
 
     nonisolated func stopSession() {
