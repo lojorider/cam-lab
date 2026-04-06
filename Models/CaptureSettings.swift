@@ -29,7 +29,18 @@ struct CaptureSettings {
     var outputFPS: OutputFPS = .fps30
     var showPreview: Bool = true
 
+    /// Recording duration in minutes. 0 = unlimited (manual stop).
+    var durationMinutes: Double = 0
+
     var captureInterval: TimeInterval {
         60.0 / snapshotsPerMinute
+    }
+
+    var hasDurationLimit: Bool {
+        durationMinutes > 0
+    }
+
+    var durationSeconds: TimeInterval {
+        durationMinutes * 60.0
     }
 }

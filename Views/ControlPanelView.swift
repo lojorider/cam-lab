@@ -70,6 +70,28 @@ struct ControlPanelView: View {
                     }
 
                     VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("Duration")
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text(durationLabel)
+                                .monospacedDigit()
+                                .fontWeight(.medium)
+                        }
+                        Slider(
+                            value: $viewModel.settings.durationMinutes,
+                            in: 0...480,
+                            step: 5
+                        )
+                        .disabled(viewModel.state.isRecording)
+                        Text(viewModel.settings.hasDurationLimit
+                            ? "Auto-stop & save after \(durationLabel)"
+                            : "Manual stop")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
                         Text("Output Frame Rate")
                             .foregroundStyle(.secondary)
                         Picker("", selection: $viewModel.settings.outputFPS) {
@@ -86,6 +108,30 @@ struct ControlPanelView: View {
                 .padding(4)
             }
 
+            // MARK: - Save Location
+            GroupBox {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Save Location")
+                        .font(.headline)
+
+                    HStack {
+                        Image(systemName: "folder.fill")
+                            .foregroundStyle(.secondary)
+                        Text(viewModel.saveDirectoryName)
+                            .font(.callout)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        Button("Change") {
+                            viewModel.chooseSaveDirectory()
+                        }
+                        .controlSize(.small)
+                        .disabled(viewModel.state.isRecording)
+                    }
+                }
+                .padding(4)
+            }
+
             // MARK: - Status Dashboard
             GroupBox {
                 VStack(alignment: .leading, spacing: 12) {
@@ -98,6 +144,10 @@ struct ControlPanelView: View {
 
                     if viewModel.state.isRecording {
                         StatusRow(label: "Elapsed", value: viewModel.elapsedTime)
+
+                        if let remaining = viewModel.remainingTime {
+                            StatusRow(label: "Remaining", value: remaining)
+                        }
                     }
 
                     if case .exporting(let progress) = viewModel.state {
@@ -111,6 +161,12 @@ struct ControlPanelView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+
+                    if let msg = viewModel.savedMessage {
+                        Label(msg, systemImage: "checkmark.circle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                    }
                 }
                 .padding(4)
             }
@@ -122,6 +178,15 @@ struct ControlPanelView: View {
         }
         .padding()
         .frame(width: 280)
+    }
+
+    private var durationLabel: String {
+        let mins = Int(viewModel.settings.durationMinutes)
+        if mins == 0 { return "Unlimited" }
+        if mins < 60 { return "\(mins) min" }
+        let h = mins / 60
+        let m = mins % 60
+        return m == 0 ? "\(h) hr" : "\(h) hr \(m) min"
     }
 
     @ViewBuilder

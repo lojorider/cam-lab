@@ -9,21 +9,40 @@ final class TimeLapseViewModel: ObservableObject {
     @Published var state: RecordingState = .idle
     @Published var framesCaptured: Int = 0
     @Published var recordingStartTime: Date?
+    @Published var savedMessage: String?
 
     let cameraManager = CameraManager()
 
     private var captureTimer: Timer?
+    private var durationTimer: Timer?
     private var framesDirectory: URL?
     private var cancellables = Set<AnyCancellable>()
 
+    private static let lastSaveFolderKey = "CamLab_lastSaveFolder"
+
+    /// The folder where videos are auto-saved.
+    var saveDirectory: URL {
+        if let saved = UserDefaults.standard.string(forKey: Self.lastSaveFolderKey) {
+            let url = URL(fileURLWithPath: saved)
+            if FileManager.default.fileExists(atPath: url.path) {
+                return url
+            }
+        }
+        // Default: ~/Movies
+        return FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Movies")
+    }
+
     init() {
-        // Forward cameraManager changes so SwiftUI picks them up
         cameraManager.objectWillChange
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
 
         cleanupOrphanedSessions()
+
+        // Ensure default save directory exists
+        try? FileManager.default.createDirectory(at: saveDirectory, withIntermediateDirectories: true)
     }
 
     /// Remove leftover CamLab_* folders/mp4s in tmp from previous crashed sessions
@@ -63,6 +82,37 @@ final class TimeLapseViewModel: ObservableObject {
         return String(format: "%02d:%02d", mins, secs)
     }
 
+    var remainingTime: String? {
+        guard settings.hasDurationLimit, let start = recordingStartTime else { return nil }
+        let elapsed = Date().timeIntervalSince(start)
+        let remaining = max(0, settings.durationSeconds - elapsed)
+        let mins = Int(remaining) / 60
+        let secs = Int(remaining) % 60
+        return String(format: "%02d:%02d", mins, secs)
+    }
+
+    var saveDirectoryName: String {
+        saveDirectory.lastPathComponent
+    }
+
+    // MARK: - Save Directory
+
+    func chooseSaveDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.prompt = "Select Folder"
+
+        panel.begin { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            UserDefaults.standard.set(url.path, forKey: Self.lastSaveFolderKey)
+            Task { @MainActor [weak self] in
+                self?.objectWillChange.send()
+            }
+        }
+    }
+
     // MARK: - Recording
 
     func startRecording() {
@@ -83,21 +133,25 @@ final class TimeLapseViewModel: ObservableObject {
         framesDirectory = tempDir
         framesCaptured = 0
         recordingStartTime = Date()
+        savedMessage = nil
         state = .recording
 
         scheduleCapture()
+        scheduleDurationTimer()
     }
 
     func stopRecording() {
         captureTimer?.invalidate()
         captureTimer = nil
+        durationTimer?.invalidate()
+        durationTimer = nil
 
         guard let framesDir = framesDirectory, framesCaptured > 0 else {
             state = .idle
             return
         }
 
-        exportVideo(from: framesDir)
+        exportVideo(from: framesDir, autoSave: settings.hasDurationLimit)
     }
 
     private func scheduleCapture() {
@@ -109,6 +163,19 @@ final class TimeLapseViewModel: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.captureFrame()
+            }
+        }
+    }
+
+    private func scheduleDurationTimer() {
+        guard settings.hasDurationLimit else { return }
+
+        durationTimer = Timer.scheduledTimer(
+            withTimeInterval: settings.durationSeconds,
+            repeats: false
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.stopRecording()
             }
         }
     }
@@ -146,7 +213,7 @@ final class TimeLapseViewModel: ObservableObject {
 
     // MARK: - Export
 
-    private func exportVideo(from framesDir: URL) {
+    private func exportVideo(from framesDir: URL, autoSave: Bool) {
         state = .exporting(progress: 0)
 
         let outputURL = framesDir
@@ -167,7 +234,11 @@ final class TimeLapseViewModel: ObservableObject {
                 }
 
                 await MainActor.run { [weak self] in
-                    self?.state = .finished(url: url)
+                    if autoSave {
+                        self?.autoSaveVideo(tempURL: url)
+                    } else {
+                        self?.state = .finished(url: url)
+                    }
                 }
             } catch {
                 await MainActor.run { [weak self] in
@@ -177,7 +248,27 @@ final class TimeLapseViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Save & Cleanup
+    // MARK: - Auto Save
+
+    private func autoSaveVideo(tempURL: URL) {
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        let filename = "CamLab_\(dateFormatter.string(from: Date())).mp4"
+        let destination = saveDirectory.appendingPathComponent(filename)
+
+        do {
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.removeItem(at: destination)
+            }
+            try FileManager.default.copyItem(at: tempURL, to: destination)
+            savedMessage = "Saved to \(saveDirectory.lastPathComponent)/\(filename)"
+            cleanupAndReset()
+        } catch {
+            state = .error("Auto-save failed: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Manual Save & Cleanup
 
     func saveVideo() {
         guard case .finished(let url) = state else { return }
@@ -186,9 +277,15 @@ final class TimeLapseViewModel: ObservableObject {
         panel.allowedContentTypes = [.mpeg4Movie]
         panel.nameFieldStringValue = url.lastPathComponent
         panel.canCreateDirectories = true
+        panel.directoryURL = saveDirectory
 
         panel.begin { [weak self] response in
             guard response == .OK, let destination = panel.url else { return }
+
+            // Remember the chosen folder
+            let folder = destination.deletingLastPathComponent().path
+            UserDefaults.standard.set(folder, forKey: Self.lastSaveFolderKey)
+
             do {
                 if FileManager.default.fileExists(atPath: destination.path) {
                     try FileManager.default.removeItem(at: destination)
@@ -226,6 +323,9 @@ final class TimeLapseViewModel: ObservableObject {
     func discardAndReset() {
         captureTimer?.invalidate()
         captureTimer = nil
+        durationTimer?.invalidate()
+        durationTimer = nil
+        savedMessage = nil
         cleanupAndReset()
     }
 }
